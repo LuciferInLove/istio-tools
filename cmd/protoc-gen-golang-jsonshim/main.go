@@ -69,7 +69,7 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 
 	// write out globals
 	p.P(`var (`)
-	p.P(marshalerName, ` = &`, protogen.GoIdent{"Marshaler", "github.com/golang/protobuf/jsonpb"}, `{}`)
+	p.P(marshalerName, ` = &`, protogen.GoIdent{"Marshaler", "github.com/golang/protobuf/jsonpb"}, `{Int64Uint64asIntegers: true}`)
 	p.P(unmarshalerName, ` = &`, protogen.GoIdent{"Unmarshaler", "github.com/golang/protobuf/jsonpb"}, `{AllowUnknownFields: true}`)
 	p.P(`)`)
 }

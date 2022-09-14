@@ -29,6 +29,6 @@ func (this *ExternalSimple_ExternalNested) UnmarshalJSON(b []byte) error {
 }
 
 var (
-	ExternalMarshaler   = &jsonpb.Marshaler{}
+	ExternalMarshaler   = &jsonpb.Marshaler{Int64Uint64asIntegers: true}
 	ExternalUnmarshaler = &jsonpb.Unmarshaler{AllowUnknownFields: true}
 )

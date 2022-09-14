@@ -92,6 +92,8 @@ type CrdGen struct {
 
 	Filename string // empty indicates the default prefix.
 
+	MaxDescriptionLength *int // maximum description length of the fields.
+
 	// Mapping of CRD name and its output configuration.
 	CrdConfigs map[string]*CrdConfig
 }
@@ -107,6 +109,12 @@ type CrdConfig struct {
 	// Optional. Mapping of version to slice of field paths that
 	// need to be marked as `x-kubernetes-preserve-unknown-fields`
 	PreserveUnknownFields map[string][]string
+
+	// Optional. Specifies wheter the spec is a required field.
+	SpecIsRequired bool
+
+	// Optional. Other names for the CRD to duplicate with.
+	Aliases []string
 
 	CustomResourceDefinition *apiext.CustomResourceDefinition
 }
@@ -318,9 +326,6 @@ func findTypePrefix(filename string) string {
 	for _, d := range protoElems(filename) {
 		switch x := d.(type) {
 		case *proto.Package:
-			if strings.LastIndex(x.Name, ".") == -1 {
-				return x.Name
-			}
 			// as an Istio api naming convention, we strip out the last element.
 			return x.Name[:strings.LastIndex(x.Name, ".")]
 		}
@@ -350,9 +355,13 @@ func extractCrdTags(lines []string, prefix string) map[string]map[string]string 
 		if len(line) == 0 {
 			continue
 		}
+		if !strings.HasPrefix(line, enableCRDGenTag+":") {
+			continue
+		}
 		s := strings.SplitN(line[len(enableCRDGenTag+":"):], ":", 2)
 		if len(s) < 2 {
 			log.Fatalf("cannot recognize type from line: %v", line)
+			continue
 		}
 
 		t := prefix + "." + s[0]
@@ -366,6 +375,7 @@ func extractCrdTags(lines []string, prefix string) map[string]map[string]string 
 			v = ""
 		} else {
 			log.Fatalf("cannot retrieve config key value pair from line: %v", line)
+			continue
 		}
 		if _, ok := out[t]; !ok {
 			c := map[string]string{}
@@ -467,6 +477,14 @@ func convertCrdConfig(c map[string]string, t string, cfg *CrdConfig) {
 	// store the fields to mark as preserved in the config
 	if f, ok := c["preserveUnknownFields"]; ok {
 		cfg.PreserveUnknownFields[version.Name] = strings.Split(f, ",")
+	}
+
+	if _, ok := c["specIsRequired"]; ok {
+		cfg.SpecIsRequired = true
+	}
+
+	if f, ok := c["aliases"]; ok {
+		cfg.Aliases = strings.Split(f, ",")
 	}
 
 	src.Spec.Versions = append(src.Spec.Versions, version)

@@ -62,6 +62,6 @@ func (this *ImportedReference) UnmarshalJSON(b []byte) error {
 }
 
 var (
-	TypesMarshaler   = &jsonpb.Marshaler{}
+	TypesMarshaler   = &jsonpb.Marshaler{Int64Uint64asIntegers: true}
 	TypesUnmarshaler = &jsonpb.Unmarshaler{AllowUnknownFields: true}
 )

@@ -22,11 +22,13 @@
 //
 // Generation involves the following steps:
 //
-//  1. Convert .proto files to CUE files
-//  2. Validate the consistency of the CUE defintions
-//  3. Convert CUE files to self-contained OpenAPI files.
+//   1. Convert .proto files to CUE files
+//   2. Validate the consistency of the CUE defintions
+//   3. Convert CUE files to self-contained OpenAPI files.
 //
 // Each of which is documented in more detail below.
+//
+//
 // 1. Converting Proto to CUE
 //
 // genoapi generates all .proto files using a single builder. As the Istio
@@ -40,12 +42,13 @@
 // fields with constraints.
 //
 // Caveats:
-//   - It is assumed that the input .proto files are valid and compile with
-//     protoc. The conversion may ignore errors if files are invalid.
-//   - CUE package names share the same naming conventions as Go packages. CUE
-//     requires the go_package option to exist and be well-defined. Note that
-//     some of the gogoproto go_package definition are illformed. Be sure to use
-//     the original .proto files for the google protobuf types.
+// - It is assumed that the input .proto files are valid and compile with
+//   protoc. The conversion may ignore errors if files are invalid.
+// - CUE package names share the same naming conventions as Go packages. CUE
+//   requires the go_package option to exist and be well-defined. Note that
+//   some of the gogoproto go_package definition are illformed. Be sure to use
+//   the original .proto files for the google protobuf types.
+//
 //
 // 2. Combine and validate generated CUE
 //
@@ -56,6 +59,8 @@
 //
 // The combines CUE definitions are validated for consistency before proceeding
 // to the next step.
+//
+//
 // 3. Converting CUE to OpenAPI
 //
 // In this step a self-contained OpenAPI definition is generated for each
@@ -64,7 +69,8 @@
 // spec itself. To avoid name collissions, types are, by convention, prefixed
 // with their proto package name.
 //
-// # Possible extensions to the generation pipeline
+//
+// Possible extensions to the generation pipeline
 //
 // The generation pipeline can be augmented by injecting CUE from other sources
 // before step 2. As combining CUE sources is a commutative operation, order
@@ -73,6 +79,7 @@
 //
 // Examples of other possible CUE sources are:
 // - constraints extracted from Go code
+//
 package main
 
 //go:generate go-bindata --nocompress --nometadata --pkg main -o assets.gen.go doc.cue
@@ -83,6 +90,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -101,7 +109,8 @@ import (
 	"cuelang.org/go/encoding/protobuf"
 	"github.com/emicklei/proto"
 	"github.com/getkin/kin-openapi/openapi3"
-	"sigs.k8s.io/yaml"
+	"github.com/ghodss/yaml"
+	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 // TODO: CUE deprecates OrderedMap. We should start using ast.File and other APIs in the
@@ -122,8 +131,6 @@ var (
 	crd = flag.Bool("crd", false, "generate CRD validation yaml based on the Istio protos and cue files")
 
 	snake = flag.String("snake", "", "comma-separated fields to add a snake case")
-
-	status = flag.String("status", "", "status field schema name to use for CRDs; only accepted when crd flag is true")
 
 	frontMatterMap map[string][]string
 )
@@ -257,8 +264,8 @@ func main() {
 			if err != nil {
 				fatal(err, "Error formatting file: ")
 			}
-			_ = os.MkdirAll(filepath.Dir(filename), 0o755)
-			if err := os.WriteFile(filename, b, 0o644); err != nil {
+			_ = os.MkdirAll(filepath.Dir(filename), 0755)
+			if err := ioutil.WriteFile(filename, b, 0644); err != nil {
 				log.Fatalf("Error writing file: %v", err)
 			}
 		}
@@ -340,11 +347,42 @@ func (x *builder) gen(dir string, g *Grouping) {
 		fatal(err, "Error generating OpenAPI file")
 	}
 
+	x.editSchema(schemas,
+		schemaIntOrStringModifier,
+		schemaSetterModifier,
+	)
+
 	if g.Mode != allFiles {
 		x.filterOpenAPI(schemas, g)
 	}
 
 	x.writeOpenAPI(schemas, g)
+}
+
+func (x *builder) editSchema(schemas *openapi.OrderedMap, modifiers ...SchemaModifier) {
+	for k, v := range schemas.Pairs() {
+		for _, mf := range append(modifiers, schemaDescriptionModifier) {
+			mf(v, schemas, k)
+		}
+
+		if orderedMap, ok := v.Value.(*openapi.OrderedMap); ok {
+			for k, v := range orderedMap.Pairs() {
+				for _, mf := range append(modifiers, schemaDescriptionModifier) {
+					mf(v, orderedMap, k)
+				}
+
+				if om, ok := v.Value.(*openapi.OrderedMap); ok {
+					x.editSchema(om, modifiers...)
+				}
+
+				if orderedMapSlice, ok := v.Value.([]*openapi.OrderedMap); ok {
+					for _, orderedMap := range orderedMapSlice {
+						x.editSchema(orderedMap, modifiers...)
+					}
+				}
+			}
+		}
+	}
 }
 
 func (x *builder) genAll(g *Grouping) {
@@ -432,17 +470,12 @@ func (x *builder) genCRD() {
 		}
 	}
 
-	statusSchema, ok := schemas[*status]
-	if !ok && *status != "" {
-		fmt.Println("Status schema not found, thus not including status schema in CRDs.")
-	}
-
 	for c, v := range x.Config.Crd.CrdConfigs {
-
 		group := c[:strings.LastIndex(c, ".")]
 		tp := crdToType[c]
 
 		versionSchemas := map[string]*openapi.OrderedMap{} //nolint:staticcheck
+		statusSchemas := map[string]*openapi.OrderedMap{}  //nolint:staticcheck
 
 		for _, version := range v.CustomResourceDefinition.Spec.Versions {
 			var schemaName string
@@ -456,9 +489,13 @@ func (x *builder) genCRD() {
 				log.Fatalf("cannot find schema for %v", schemaName)
 			}
 			versionSchemas[version.Name] = sc
+			status := strings.Replace(fmt.Sprintf("%s.%s.%s", group, version.Name, tp), "Spec", "Status", 1)
+			if statusSchema, ok := schemas[status]; ok {
+				statusSchemas[version.Name] = statusSchema
+			}
 		}
 
-		completeCRD(v.CustomResourceDefinition, versionSchemas, statusSchema, v.PreserveUnknownFields)
+		completeCRD(v.CustomResourceDefinition, versionSchemas, statusSchemas, v.PreserveUnknownFields, x.Crd, v.SpecIsRequired)
 	}
 
 	x.writeCRDFiles()
@@ -478,52 +515,43 @@ func (x *builder) genOpenAPI(name string, inst *cue.Instance) (*openapi.OrderedM
 	}
 
 	gen.DescriptionFunc = func(v cue.Value) string {
-		if *crd {
+		l, _ := v.Label()
+
+		t := []string{
+			NewCueGenParameterMarker(ImportPathParameter, inst.ImportPath),
+			NewCueGenParameterMarker(PackageNameParameter, inst.PkgName),
+		}
+
+		if strings.HasPrefix(inst.ImportPath, "istio.io/api") {
 			n := strings.Split(inst.ImportPath, "/")
-			l, _ := v.Label()
-			l = l[1:] // Remove leading '#' from definition
-			schema := "istio." + n[len(n)-2] + "." + n[len(n)-1] + "." + l
-			if res, ok := frontMatterMap[schema]; ok {
-				return res[0] + " See more details at: " + res[1]
+			if len(n) > 3 {
+				istioPackage := "istio." + n[len(n)-2] + "." + n[len(n)-1] + "." + l
+				t = append(t, NewCueGenParameterMarker(IstioPackageNameParameter, istioPackage))
 			}
-			// get the first sentence out of the paragraphs.
-			for _, doc := range v.Doc() {
-				if doc.Text() == "" {
-					continue
-				}
-				if strings.HasPrefix(doc.Text(), "$hide_from_docs") {
-					return ""
-				}
-				if paras := strings.Split(doc.Text(), "\n"); len(paras) > 0 {
-					words := strings.Split(paras[0], " ")
-					for i, w := range words {
-						if strings.HasSuffix(w, ".") {
-							return strings.Join(words[:i+1], " ")
-						}
-					}
-				}
-			}
-			return ""
 		}
+
+		attr := v.Attribute("protobuf")
+		for i := 0; i >= 0; i++ {
+			attrString, err := attr.String(i)
+			if err != nil {
+				break
+			}
+			if p := strings.SplitN(attrString, "=", 2); len(p) == 2 {
+				p[0] = strings.Trim(strings.Trim(p[0], "("), ")")
+				t = append(t, NewCueGenParameterMarker(ProtoAttributeParameter, fmt.Sprintf("%s:%s", p[0], p[1])))
+			}
+		}
+
+		t = append(t, NewCueGenParameterMarker(FieldNameParameter, l))
+
+		if i, _ := v.Reference(); i != nil && i.ImportPath != "" {
+			t = append(t, NewCueGenParameterMarker(ReferenceImportPathParameter, i.ImportPath))
+		}
+
 		for _, doc := range v.Doc() {
-			if doc.Text() == "" {
-				continue
-			}
-			// Cut off first section, but don't stop if this ends with
-			// an example, list, or the like, as it will end weirdly.
-			// Also remove any protoc-gen-docs annotations at the beginning
-			// and any new-line.
-			split := strings.Split(doc.Text(), "\n\n")
-			k := 1
-			for ; k < len(split) && strings.HasSuffix(split[k-1], ":"); k++ {
-			}
-			s := strings.Fields(strings.Join(split[:k], "\n"))
-			for i := 0; i < len(s) && strings.HasPrefix(s[i], "$"); i++ {
-				s[i] = ""
-			}
-			return strings.Join(s, " ")
+			t = append(t, doc.Text())
 		}
-		return ""
+		return strings.Join(t, "\n")
 	}
 
 	if *crd {
@@ -552,7 +580,6 @@ func (x *builder) reference(goPkg string, path []string) string {
 // It does so my looking up the top-level items in the proto files defined
 // in g, recursively marking their dependencies, and then eliminating any
 // schema from items that was not marked.
-//
 //nolint:staticcheck
 func (x *builder) filterOpenAPI(items *openapi.OrderedMap, g *Grouping) {
 	// All references found.
@@ -694,7 +721,7 @@ func (x *builder) writeOpenAPI(schemas *openapi.OrderedMap, g *Grouping) {
 
 	// Note: this just tests basic OpenAPI 3 validity. It cannot, of course,
 	// know if the the proto files were correctly mapped.
-	_, err = openapi3.NewLoader().LoadFromData(b)
+	_, err = openapi3.NewSwaggerLoader().LoadSwaggerFromData(b)
 	if err != nil {
 		log.Fatalf("Invalid OpenAPI generated: %v", err)
 	}
@@ -704,7 +731,7 @@ func (x *builder) writeOpenAPI(schemas *openapi.OrderedMap, g *Grouping) {
 
 	filename := filepath.Join(x.cwd, g.dir, g.OapiFilename)
 	fmt.Printf("Writing OpenAPI schemas into %v...\n", filename)
-	err = os.WriteFile(filename, buf.Bytes(), 0o644)
+	err = ioutil.WriteFile(filename, buf.Bytes(), 0644)
 	if err != nil {
 		log.Fatalf("Error writing OpenAPI file %s in dir %s: %v", g.OapiFilename, g.dir, err)
 	}
@@ -725,7 +752,7 @@ func (x *builder) writeCRDFiles() {
 	}
 	defer out.Close()
 
-	if _, err = out.WriteString("# DO NOT EDIT - Generated by Cue OpenAPI generator based on Istio APIs.\n"); err != nil {
+	if _, err = out.WriteString("# DO NOT EDIT - Generated by Cue OpenAPI generator.\n"); err != nil {
 		log.Fatal(err)
 	}
 
@@ -737,24 +764,53 @@ func (x *builder) writeCRDFiles() {
 	sort.Strings(keyList)
 
 	for _, k := range keyList {
-		y, err := yaml.Marshal(x.Crd.CrdConfigs[k].CustomResourceDefinition)
-		if err != nil {
-			log.Fatalf("Error marsahling CRD to yaml: %v", err)
-		}
+		crd := x.Crd.CrdConfigs[k].CustomResourceDefinition
+		x.writeToFile(out, x.getCRDYaml(crd))
 
-		// remove the status and creationTimestamp fields from the output. Ideally we could use OrderedMap to remove those.
-		y = bytes.ReplaceAll(y, []byte(statusOutput), []byte(""))
-		y = bytes.ReplaceAll(y, []byte(creationTimestampOutput), []byte(""))
-		// keep the quotes in the output which is required by helm.
-		y = bytes.ReplaceAll(y, []byte("helm.sh/resource-policy: keep"), []byte(`"helm.sh/resource-policy": keep`))
-		n, err := out.Write(append(y, []byte("\n---\n")...))
-		if err != nil {
-			log.Fatalf("Error writing to yaml file: %v", err)
-		}
-		if n < len(y) {
-			log.Fatalf("Error writing to yaml file: %v", io.ErrShortWrite)
+		for _, alias := range x.Crd.CrdConfigs[k].Aliases {
+			plural := strings.ToLower(alias) + "s"
+			b := strings.Index(alias, "(")
+			e := strings.Index(alias, ")")
+			if b > 0 && e > 0 && b < e {
+				plural = strings.ToLower(alias[0:b]) + alias[b+1:e]
+				alias = alias[0:b]
+			}
+			crd := crd.DeepCopy()
+			crd.Spec.Names = apiext.CustomResourceDefinitionNames{
+				Kind:     alias,
+				ListKind: alias + "List",
+				Singular: strings.ToLower(alias),
+				Plural:   plural,
+			}
+			crd.Name = fmt.Sprintf("%v.%v", crd.Spec.Names.Plural, crd.Spec.Group)
+			x.writeToFile(out, x.getCRDYaml(crd))
 		}
 	}
+}
+
+func (x *builder) writeToFile(out *os.File, y []byte) {
+	n, err := out.Write(append(y, []byte("\n---\n")...))
+	if err != nil {
+		log.Fatalf("Error writing to yaml file: %v", err)
+	}
+	if n < len(y) {
+		log.Fatalf("Error writing to yaml file: %v", io.ErrShortWrite)
+	}
+}
+
+func (x *builder) getCRDYaml(crd *apiext.CustomResourceDefinition) []byte {
+	y, err := yaml.Marshal(crd)
+	if err != nil {
+		log.Fatalf("Could not marshal CRD to yaml: %v", err)
+	}
+
+	// remove the status and creationTimestamp fields from the output. Ideally we could use OrderedMap to remove those.
+	y = bytes.ReplaceAll(y, []byte(statusOutput), []byte(""))
+	y = bytes.ReplaceAll(y, []byte(creationTimestampOutput), []byte(""))
+	// keep the quotes in the output which is required by helm.
+	y = bytes.ReplaceAll(y, []byte("helm.sh/resource-policy: keep"), []byte(`"helm.sh/resource-policy": keep`))
+
+	return y
 }
 
 type marker struct {

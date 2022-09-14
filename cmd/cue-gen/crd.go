@@ -41,9 +41,8 @@ status:
 )
 
 // Build CRDs based on the configuration and schema.
-//
 //nolint:staticcheck,interfacer,lll
-func completeCRD(c *apiextv1.CustomResourceDefinition, versionSchemas map[string]*openapi.OrderedMap, statusSchema *openapi.OrderedMap, preserveUnknownFields map[string][]string) {
+func completeCRD(c *apiextv1.CustomResourceDefinition, versionSchemas map[string]*openapi.OrderedMap, statusSchemas map[string]*openapi.OrderedMap, preserveUnknownFields map[string][]string, crd *CrdGen, isSpecRequired bool) {
 	for i, version := range c.Spec.Versions {
 
 		b, err := versionSchemas[version.Name].MarshalJSON()
@@ -64,6 +63,28 @@ func completeCRD(c *apiextv1.CustomResourceDefinition, versionSchemas map[string
 			}
 		}
 
+		// move inline properties in a cycle until none found
+		iv := &inlinePropertiesVisitor{}
+		for {
+			iv.Reset()
+			crdutil.EditSchema(j, iv)
+			if !iv.IsInlineFound() {
+				break
+			}
+		}
+
+		// run schema modifiers
+		for _, visitor := range []crdutil.SchemaVisitor{
+			&setRequiredFieldsVisitor{},
+			&applyKubebuilderMarkersVisitor{},
+			&intOrStringVisitor{},
+			&formatDescriptionVisitor{
+				maxDescriptionLength: crd.MaxDescriptionLength,
+			},
+		} {
+			crdutil.EditSchema(j, visitor)
+		}
+
 		version.Schema = &apiextv1.CustomResourceValidation{OpenAPIV3Schema: &apiextv1.JSONSchemaProps{
 			Type: "object",
 			Properties: map[string]apiextv1.JSONSchemaProps{
@@ -71,10 +92,14 @@ func completeCRD(c *apiextv1.CustomResourceDefinition, versionSchemas map[string
 			},
 		}}
 
+		if isSpecRequired {
+			version.Schema.OpenAPIV3Schema.Required = []string{"spec"}
+		}
+
 		// only add status schema validation when status subresource is enabled in the CRD.
 		if version.Subresources != nil {
 			status := &apiextv1.JSONSchemaProps{}
-			if statusSchema == nil {
+			if statusSchema, ok := statusSchemas[version.Name]; !ok {
 				status = &apiextv1.JSONSchemaProps{
 					Type:                   "object",
 					XPreserveUnknownFields: pointer.BoolPtr(true),
@@ -87,6 +112,28 @@ func completeCRD(c *apiextv1.CustomResourceDefinition, versionSchemas map[string
 
 				if err = json.Unmarshal(o, status); err != nil {
 					log.Fatal("Cannot unmarshal raw status schema to JSONSchemaProps")
+				}
+
+				// move inline properties in a cycle until none found
+				iv := &inlinePropertiesVisitor{}
+				for {
+					iv.Reset()
+					crdutil.EditSchema(j, iv)
+					if !iv.IsInlineFound() {
+						break
+					}
+				}
+
+				// run schema modifiers
+				for _, visitor := range []crdutil.SchemaVisitor{
+					&setRequiredFieldsVisitor{},
+					&applyKubebuilderMarkersVisitor{},
+					&intOrStringVisitor{},
+					&formatDescriptionVisitor{
+						maxDescriptionLength: crd.MaxDescriptionLength,
+					},
+				} {
+					crdutil.EditSchema(status, visitor)
 				}
 			}
 
