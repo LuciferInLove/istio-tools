@@ -42,8 +42,8 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 	p.P("package ", file.GoPackageName)
 	var process func([]*protogen.Message)
 
-	marshalerName := FileName(file) + "Marshaler"
-	unmarshalerName := FileName(file) + "Unmarshaler"
+	marshalOptionsName := FileName(file) + "MarshalOptions"
+	unmarshalOptionsName := FileName(file) + "UnmarshalOptions"
 
 	process = func(messages []*protogen.Message) {
 		for _, message := range messages {
@@ -52,15 +52,15 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 				continue
 			}
 			typeName := message.GoIdent.GoName
-			p.P(`// MarshalJSON is a custom marshaler for `, typeName)
-			p.P(`func (this *`, typeName, `) MarshalJSON() ([]byte, error) {`)
-			p.P(`str, err := `, marshalerName, `.MarshalToString(this)`)
+			p.P(`// Marshal is a custom marshaler for `, typeName)
+			p.P(`func (this *`, typeName, `) Marshal() ([]byte, error) {`)
+			p.P(`str, err := `, marshalOptionsName, `.MarshalToString(this)`)
 			p.P(`return []byte(str), err`)
 			p.P(`}`)
-			// Generate UnmarshalJSON() method for this type
-			p.P(`// UnmarshalJSON is a custom unmarshaler for `, typeName)
-			p.P(`func (this *`, typeName, `) UnmarshalJSON(b []byte) error {`)
-			p.P(`return `, unmarshalerName, `.Unmarshal(`, protogen.GoIdent{"NewReader", "bytes"}, `(b), this)`)
+			// Generate Unmarshal() method for this type
+			p.P(`// Unmarshal is a custom unmarshaler for `, typeName)
+			p.P(`func (this *`, typeName, `) Unmarshal(b []byte) error {`)
+			p.P(`return `, unmarshalOptionsName, `.Unmarshal(`, protogen.GoIdent{"NewReader", "bytes"}, `(b), this)`)
 			p.P(`}`)
 			process(message.Messages)
 		}
@@ -69,8 +69,8 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 
 	// write out globals
 	p.P(`var (`)
-	p.P(marshalerName, ` = &`, protogen.GoIdent{"Marshaler", "github.com/golang/protobuf/jsonpb"}, `{Int64Uint64asIntegers: true}`)
-	p.P(unmarshalerName, ` = &`, protogen.GoIdent{"Unmarshaler", "github.com/golang/protobuf/jsonpb"}, `{AllowUnknownFields: true}`)
+	p.P(marshalOptionsName, ` = &`, protogen.GoIdent{"MarshalOptions", "google.golang.org/protobuf/encoding/protojson"}, `{}`)
+	p.P(unmarshalOptionsName, ` = &`, protogen.GoIdent{"UnmarshalOptions", "google.golang.org/protobuf/encoding/protojson"}, `{}`)
 	p.P(`)`)
 }
 
