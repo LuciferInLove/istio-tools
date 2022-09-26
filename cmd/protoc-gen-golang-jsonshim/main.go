@@ -54,13 +54,13 @@ func generateFile(gen *protogen.Plugin, file *protogen.File) {
 			typeName := message.GoIdent.GoName
 			p.P(`// Marshal is a custom marshaler for `, typeName)
 			p.P(`func (this *`, typeName, `) Marshal() ([]byte, error) {`)
-			p.P(`str, err := `, marshalOptionsName, `.MarshalToString(this)`)
+			p.P(`str, err := `, marshalOptionsName, `.Marshal(this)`)
 			p.P(`return []byte(str), err`)
 			p.P(`}`)
 			// Generate Unmarshal() method for this type
 			p.P(`// Unmarshal is a custom unmarshaler for `, typeName)
 			p.P(`func (this *`, typeName, `) Unmarshal(b []byte) error {`)
-			p.P(`return `, unmarshalOptionsName, `.Unmarshal(`, protogen.GoIdent{"NewReader", "bytes"}, `(b), this)`)
+			p.P(`return `, unmarshalOptionsName, `.Unmarshal(b, this)`)
 			p.P(`}`)
 			process(message.Messages)
 		}
