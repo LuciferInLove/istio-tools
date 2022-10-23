@@ -43,7 +43,7 @@ status:
 // Build CRDs based on the configuration and schema.
 //
 //nolint:staticcheck,interfacer,lll
-func completeCRD(c *apiextv1.CustomResourceDefinition, versionSchemas map[string]*openapi.OrderedMap, statusSchema *openapi.OrderedMap, preserveUnknownFields map[string][]string) {
+func completeCRD(c *apiextv1.CustomResourceDefinition, versionSchemas map[string]*openapi.OrderedMap, statusSchema *openapi.OrderedMap, preserveUnknownFields map[string][]string, crd *CrdGen) {
 	for i, version := range c.Spec.Versions {
 
 		b, err := versionSchemas[version.Name].MarshalJSON()
@@ -66,9 +66,13 @@ func completeCRD(c *apiextv1.CustomResourceDefinition, versionSchemas map[string
 
 		// run schema modifiers
 		for _, visitor := range []crdutil.SchemaVisitor{
+			&setRequiredFieldsVisitor{},
 			&applyKubebuilderMarkersVisitor{},
 			&intOrStringVisitor{},
 			&formatDescriptionVisitor{},
+			&formatDescriptionVisitor{
+				maxDescriptionLength: crd.MaxDescriptionLength,
+			},
 		} {
 			crdutil.EditSchema(j, visitor)
 		}
