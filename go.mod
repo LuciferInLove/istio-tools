@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	cloud.google.com/go/spanner v1.39.0
-	cuelang.org/go v0.5.0-beta.2
+	cuelang.org/go v0.5.0
 	github.com/client9/gospell v0.0.0-20160306015952-90dfc71015df
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/emicklei/proto v1.11.0
