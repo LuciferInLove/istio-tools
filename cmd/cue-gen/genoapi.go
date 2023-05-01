@@ -101,7 +101,7 @@ import (
 	"cuelang.org/go/encoding/protobuf"
 	"github.com/emicklei/proto"
 	"github.com/getkin/kin-openapi/openapi3"
-	"gopkg.in/yaml.v2"
+	"github.com/ghodss/yaml"
 	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
